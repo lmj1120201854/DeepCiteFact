@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import json
-import os
 
 from verl import DataProto
 from verl.utils.reward_score import default_compute_score
@@ -142,13 +141,9 @@ class CustomRewardManager(AbstractRewardManager):
             }
             json_datas.append(save_item)
             reward_tensor[i, valid_response_lengths[i] - 1] = 0.5 * fact_rewards[i] + 0.35 * citation_rewards[i][-1] + 0.05 * format_rewards[i] + 0.1 * search_rewards[i]
-        # 定义文件路径
-        save_path = f"./rollout_data/rollout_data_step_{global_steps}.jsonl"
-
-        # 确保父目录存在，如果不存在则自动创建
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        with open(save_path, "w") as fout:
+        
+        # save rollout_data
+        with open(f"./rollout_data/rollout_data_step_{global_steps}.jsonl", "w") as fout:
             for item in json_datas:
                 fout.write(json.dumps(item, ensure_ascii=False) + "\n")
 

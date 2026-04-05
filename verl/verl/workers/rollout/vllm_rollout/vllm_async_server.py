@@ -13,7 +13,6 @@
 # limitations under the License.
 import argparse
 import asyncio
-import inspect
 import json
 import logging
 import os
@@ -50,80 +49,6 @@ from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
 
 logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
-
-_SAMPLING_PARAM_NAMES = set(inspect.signature(SamplingParams).parameters)
-_DEFAULT_TOOL_STOP = "</google_search>"
-
-
-class _SGLangCompatibleVLLMAdapter:
-    """Adapt vLLM async generate() I/O to the subset of SGLang semantics used by ToolAgentLoop."""
-
-    def __init__(self, config: RolloutConfig | RewardModelConfig):
-        self.config = config
-
-    def build_sampling_params(self, raw_params: dict[str, Any], prompt_len: int) -> tuple[SamplingParams, bool, list[str]]:
-        sampling_params = dict(raw_params)
-        max_new_tokens = min(self.config.response_length, self.config.max_model_len - prompt_len - 1)
-        return_logprob = sampling_params.pop("logprobs", False)
-
-        # SGLang async server uses max_new_tokens + stop + no_stop_trim.
-        # vLLM does not understand no_stop_trim, so we emulate its visible effect
-        # with include_stop_str_in_output when available.
-        sampling_params.pop("max_new_tokens", None)
-        sampling_params.pop("no_stop_trim", None)
-
-        stop = sampling_params.get("stop")
-        if not stop:
-            stop_list = [_DEFAULT_TOOL_STOP]
-        elif isinstance(stop, str):
-            stop_list = [stop]
-        else:
-            stop_list = list(stop)
-        sampling_params["stop"] = stop_list
-
-        sampling_params.setdefault("temperature", self.config.temperature)
-        sampling_params.setdefault("top_p", self.config.top_p)
-        if "top_k" in _SAMPLING_PARAM_NAMES:
-            sampling_params.setdefault("top_k", self.config.top_k)
-        if "ignore_eos" in _SAMPLING_PARAM_NAMES:
-            sampling_params.setdefault("ignore_eos", self.config.ignore_eos)
-        if "detokenize" in _SAMPLING_PARAM_NAMES:
-            sampling_params.setdefault("detokenize", True)
-        sampling_params["logprobs"] = 0 if return_logprob else None
-        sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
-        if stop_list and "include_stop_str_in_output" in _SAMPLING_PARAM_NAMES:
-            sampling_params.setdefault("include_stop_str_in_output", True)
-
-        unsupported_params = {k: v for k, v in sampling_params.items() if k not in _SAMPLING_PARAM_NAMES}
-        if unsupported_params:
-            logger.debug(f"Ignoring vLLM-unsupported sampling params: {sorted(unsupported_params)}")
-        sampling_params = {k: v for k, v in sampling_params.items() if k in _SAMPLING_PARAM_NAMES}
-
-        return SamplingParams(max_tokens=max_new_tokens, **sampling_params), return_logprob, stop_list
-
-    def build_output(
-        self,
-        request_output,
-        *,
-        return_logprob: bool,
-        stop_list: list[str],
-    ) -> TokenOutput:
-        text = getattr(request_output, "text", None) or ""
-        finish_reason = getattr(request_output, "finish_reason", None)
-
-        # If the local vLLM build does not support include_stop_str_in_output,
-        # keep the external contract aligned with SGLang by stitching the stop
-        # string back to text when generation stopped on it.
-        if finish_reason == "stop" and stop_list and not any(stop in text for stop in stop_list):
-            text = text + stop_list[0]
-
-        if not return_logprob:
-            # Match SGLang async behavior: text-only output when logprobs are disabled.
-            return TokenOutput(token_ids=[], log_probs=None, text=text)
-
-        token_ids = request_output.token_ids
-        log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(request_output.logprobs)]
-        return TokenOutput(token_ids=token_ids, log_probs=log_probs, text=text)
 
 
 class ExternalZeroMQDistributedExecutor(Executor):
@@ -295,10 +220,6 @@ class vLLMHttpServer:
             "disable_log_stats": self.config.disable_log_stats,
             "tensor_parallel_size": self.config.tensor_model_parallel_size,
             "seed": self.config.get("seed", 0),
-            # Keep vLLM sampling semantics aligned with the explicit rollout
-            # config instead of silently inheriting the model's HF generation
-            # config, which sglang does not use here.
-            "generation_config": "vllm",
             "override_generation_config": json.dumps(override_generation_config),
             **engine_kwargs,
         }
@@ -425,8 +346,10 @@ class vLLMHttpServer:
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
         # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
-        adapter = _SGLangCompatibleVLLMAdapter(self.config)
-        sampling_params, return_logprob, stop_list = adapter.build_sampling_params(sampling_params, len(prompt_ids))
+        max_tokens = self.config.max_model_len - len(prompt_ids)
+        sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
+        sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
+        sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)
         prompt_ids = _qwen2_5_vl_dedup_image_tokens(prompt_ids, self.model_config.processor)
         prompt = TokensPrompt(
             prompt_token_ids=prompt_ids, multi_modal_data={"image": image_data} if image_data else None
@@ -439,7 +362,11 @@ class vLLMHttpServer:
             final_res = output
         assert final_res is not None
 
-        return adapter.build_output(final_res.outputs[0], return_logprob=return_logprob, stop_list=stop_list)
+        token_ids = final_res.outputs[0].token_ids
+        log_probs = None
+        if sampling_params.logprobs is not None:
+            log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(final_res.outputs[0].logprobs)]
+        return TokenOutput(token_ids=token_ids, log_probs=log_probs)
 
     async def wake_up(self):
         if self.rollout_mode == RolloutMode.HYBRID:
