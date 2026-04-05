@@ -28,15 +28,17 @@ class AgentData:
         self.init_messages_length = len(self.messages)
 
 
-def truncate_at_call_tool(text):
+def truncate_at_call_tool(text, end_tag):
     if not text:
         return text
 
-    tag = "</google_search>"
-    index = text.find(tag)
+    if not end_tag:
+        return text
+
+    index = text.find(end_tag)
 
     if index != -1:
-        return text[:index + len(tag)]
+        return text[:index + len(end_tag)]
     
     # 如果没找到，返回原始文本
     return text
@@ -81,7 +83,7 @@ class ToolAgentLoop:
                 truncate_flag = False
         
         if truncate_flag:
-            output = truncate_at_call_tool(output)
+            output = truncate_at_call_tool(output, self.tool_parser.tool_call_end_token)
             
         # 检查是否结束
         if agent_data.total_response_length + self.get_length(output) >= self.args.max_response_length:

@@ -346,7 +346,14 @@ class vLLMHttpServer:
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
         # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
-        max_tokens = self.config.max_model_len - len(prompt_ids)
+        available_tokens = self.config.max_model_len - len(prompt_ids)
+        max_tokens = min(self.config.response_length, available_tokens)
+        if max_tokens <= 0:
+            logger.warning(
+                "Skip vLLM generation because prompt length reached max_model_len. "
+                f"prompt_len={len(prompt_ids)}, max_model_len={self.config.max_model_len}"
+            )
+            return TokenOutput(token_ids=[], log_probs=None, text="")
         sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
         sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)

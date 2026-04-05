@@ -147,4 +147,14 @@ class CustomRewardManager(AbstractRewardManager):
             for item in json_datas:
                 fout.write(json.dumps(item, ensure_ascii=False) + "\n")
 
+        if return_dict:
+            reward_extra_info = {
+                "fact_reward": fact_rewards,
+                "citation_reward": citation_rewards,
+                "search_reward": search_rewards,
+                "search_num": search_nums,
+                "format_reward": format_rewards,
+            }
+            return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
+
         return reward_tensor, fact_rewards, citation_rewards, search_rewards, search_nums, format_rewards

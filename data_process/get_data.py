@@ -93,8 +93,8 @@ def calculate_format_reward(text):
     token_pattern = r'<(?:/)?(?:think|google_search|tool_response|answer)>'
     tokens = re.findall(token_pattern, text)
 
-    # 3. 必须包含至少一次搜索流程
-    if '<google_search>' not in tokens:
+    # 3. 必须至少包含 think/answer 的基本结构；搜索是可选流程
+    if '<think>' not in tokens or '<answer>' not in tokens:
         return 0.0
 
     # 4. 严苛的顺序流检查
