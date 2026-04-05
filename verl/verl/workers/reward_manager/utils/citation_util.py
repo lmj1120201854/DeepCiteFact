@@ -36,6 +36,25 @@ def request_model(query):
     return ""
 
 
+def normalize_url(url: str) -> str:
+    if not isinstance(url, str):
+        return ""
+    return url.strip().rstrip('.,);]')
+
+
+def fallback_extract_citations_from_text(text: str):
+    """Regex fallback for markdown citations when extractor LLM output is malformed."""
+    pattern = r'\[([^\[\]]+)\]\((https?://[^\s\)]+)\)'
+    matches = re.findall(pattern, text)
+    items = []
+    for desc, url in matches:
+        clean_url = normalize_url(url)
+        if not clean_url:
+            continue
+        items.append({"fact": desc.strip(), "url": clean_url})
+    return items
+
+
 # ---------- extract tool_output blocks ----------
 def extract_tool_blocks(text):
     return re.findall(r"<tool_response>(.*?)</tool_response>", text, flags=re.S)
@@ -66,9 +85,10 @@ def extract_url_content(text):
             text_match = re.search(r'Text:\s*(.+)', snippet, flags=re.S)
 
             if url_match and text_match:
-                url = url_match.group(1).strip()
+                url = normalize_url(url_match.group(1))
                 content = text_match.group(1).strip()
-                final.setdefault(url, content)
+                if url:
+                    final.setdefault(url, content)
 
     return final
 
@@ -119,7 +139,7 @@ def calculate_f1(response, url_to_content):
     try:
         data = json.loads(result)
     except:
-        data = []
+        data = fallback_extract_citations_from_text(text)
     
     # print("data:", data)
     # 形成prompts
@@ -127,7 +147,7 @@ def calculate_f1(response, url_to_content):
     for item in data:
         try:
             claim = item.get("fact", "")
-            url = item.get("url", "")
+            url = normalize_url(item.get("url", ""))
             if url not in url_to_content:
                 continue
             document = url_to_content.get(url, "")  # 事实

@@ -70,7 +70,16 @@ def parse_claims(response):
     if not response or "no verifiable objective claims" in response:
         return []
     try:
-        claims = [line[2:] for line in response.strip().split('\n') if line.startswith('* ')]
+        claims = []
+        for raw_line in response.strip().split('\n'):
+            line = raw_line.strip()
+            if line.startswith("* ") or line.startswith("- "):
+                claims.append(line[2:].strip())
+                continue
+            # Support numbered outputs like "1. ..."
+            m = re.match(r"^\d+\.\s+(.*)$", line)
+            if m:
+                claims.append(m.group(1).strip())
         return list(dict.fromkeys(claims))  # drop duplicate
     except Exception as e:
         print(f"error {e}")
@@ -90,13 +99,25 @@ def request_check(claim):
                 temperature=0.1,
                 top_p=0.1,
                 logprobs=True,
-                max_tokens=1  # True or False
+                max_tokens=2  # True or False
             )
             logprobs = response.choices[0].logprobs.content
-            if logprobs[0].token == "True":
-                return math.exp(logprobs[0].logprob)
-            if  logprobs[0].token == "False":
-                return 1.0 - math.exp(logprobs[0].logprob)
+
+            # Prefer token-level probability when available, but normalize token text first.
+            if logprobs and len(logprobs) > 0:
+                token_text = (logprobs[0].token or "").strip().lower()
+                prob_true = math.exp(logprobs[0].logprob)
+                if token_text.startswith("true"):
+                    return prob_true
+                if token_text.startswith("false"):
+                    return 1.0 - prob_true
+
+            # Fallback: parse text content robustly.
+            content = (response.choices[0].message.content or "").strip().lower()
+            if content.startswith("true"):
+                return 1.0
+            if content.startswith("false"):
+                return 0.0
         except:
             time.sleep(1)
             continue
