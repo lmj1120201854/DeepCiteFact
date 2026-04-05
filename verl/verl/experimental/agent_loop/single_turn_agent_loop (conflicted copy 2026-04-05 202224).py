@@ -23,6 +23,19 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _ensure_token_ids(output, tokenizer) -> list[int]:
+    if isinstance(output.token_ids, list) and len(output.token_ids) > 0:
+        return output.token_ids
+
+    if not isinstance(output.text, str):
+        raise TypeError(
+            "SingleTurnAgentLoop expected async rollout output to contain token_ids or string text, "
+            f"got token_ids={type(output.token_ids).__name__}, text={type(output.text).__name__}"
+        )
+
+    return tokenizer.encode(output.text, add_special_tokens=False)
+
+
 @register("single_turn_agent")
 class SingleTurnAgentLoop(AgentLoopBase):
     """Naive agent loop that only do single turn chat completion."""
@@ -50,11 +63,12 @@ class SingleTurnAgentLoop(AgentLoopBase):
             output = await self.server_manager.generate(
                 request_id=request_id, prompt_ids=prompt_ids, sampling_params=sampling_params, image_data=image_data
             )
-        response_mask = [1] * len(output.token_ids)
+        response_ids = _ensure_token_ids(output, self.tokenizer)
+        response_mask = [1] * len(response_ids)
 
         output = AgentLoopOutput(
             prompt_ids=prompt_ids,
-            response_ids=output.token_ids[: self.response_length],
+            response_ids=response_ids[: self.response_length],
             response_mask=response_mask[: self.response_length],
             response_logprobs=output.log_probs[: self.response_length] if output.log_probs else None,
             multi_modal_data={"image": image_data} if image_data is not None else {},
