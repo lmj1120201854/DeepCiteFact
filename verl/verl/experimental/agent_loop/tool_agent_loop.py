@@ -70,12 +70,12 @@ def truncate_at_call_tool(output, tokenizer):
     has_eos = (ids[-1] == tokenizer.eos_token_id)
     
     output.token_ids = ids[:end_pos]
-    if output.log_probs:
+    if output.log_probs is not None:
         output.log_probs = output.log_probs[:end_pos]
         
     if has_eos and output.token_ids[-1] != tokenizer.eos_token_id:
         output.token_ids.append(tokenizer.eos_token_id)
-        if output.log_probs:
+        if output.log_probs is not None:
             output.log_probs.append(output.log_probs[-1] if output.log_probs else 0.0)
 
     return output
@@ -93,6 +93,39 @@ def ensure_token_ids(output, tokenizer):
         )
 
     return tokenizer.encode(output.text, add_special_tokens=False)
+
+
+def get_tool_call_end_token(tool_parser) -> str:
+    return getattr(tool_parser, "tool_call_end_token", "</google_search>")
+
+
+def truncate_at_call_tool_exact(output, tokenizer, target_str: str):
+    ids = output.token_ids
+
+    if not isinstance(ids, list) or len(ids) == 0:
+        return output
+
+    full_text = output.text if isinstance(output.text, str) else tokenizer.decode(ids, skip_special_tokens=False)
+    end_idx = full_text.find(target_str)
+    if end_idx == -1:
+        return output
+
+    # vLLM may keep generating after the tool call. Re-truncate on the exact
+    # string boundary so we do not leak trailing content or EOS into the next
+    # tool round's prompt.
+    truncated_text = full_text[: end_idx + len(target_str)]
+    truncated_ids = tokenizer.encode(truncated_text, add_special_tokens=False)
+
+    output.token_ids = truncated_ids
+    output.text = truncated_text
+
+    if output.log_probs is not None:
+        if len(output.log_probs) >= len(truncated_ids):
+            output.log_probs = output.log_probs[: len(truncated_ids)]
+        else:
+            output.log_probs = None
+
+    return output
 
 
 class AgentData:
@@ -271,33 +304,34 @@ class ToolAgentLoop(AgentLoopBase):
 
         # 针对prompt生成response，prompt是动态更新和添加的，比如会将tool_response的结果添加到prompt_ids里边
         with simple_timer("generate_sequences", agent_data.metrics):
+            request_sampling_params = dict(sampling_params)
+            tool_call_end_token = get_tool_call_end_token(self.tool_parser)
+            # Keep behavior aligned with sglang: stop right after a complete
+            # tool call closing tag when parser exposes one.
+            if tool_call_end_token and "stop" not in request_sampling_params:
+                request_sampling_params["stop"] = [tool_call_end_token]
             output = await self.server_manager.generate(
                 request_id=agent_data.request_id,
                 prompt_ids=agent_data.prompt_ids,
-                sampling_params=sampling_params,
+                sampling_params=request_sampling_params,
                 image_data=agent_data.image_data,
             )
         output.token_ids = ensure_token_ids(output, self.tokenizer)
+        tool_call_end_token = get_tool_call_end_token(self.tool_parser)
+        output = truncate_at_call_tool_exact(output, self.tokenizer, tool_call_end_token)
+
         # 先判断是否需要结束并添加额外信息
-        truncate_flag = True
         if self.max_assistant_turns and agent_data.assistant_turns + 1 >= self.max_assistant_turns:
-            output = truncate_at_call_tool(output, self.tokenizer)
             _, tool_calls = await self.tool_parser.extract_tool_calls(output.token_ids)
             if len(tool_calls) > 0:
                 final_text = "\n<answer>Cannot determine an answer based on the available information.</answer>"
                 final_text_ids = self.tokenizer.encode(final_text, add_special_tokens=False)
                 output.token_ids.extend(final_text_ids)
-                if output.log_probs:
-                    pad_logprob = output.log_probs[-1] if output.log_probs else 0.0
+                if output.log_probs is not None:
+                    pad_logprob = output.log_probs[-1] if len(output.log_probs) > 0 else 0.0
                     output.log_probs.extend([pad_logprob] * len(final_text_ids))
                 if isinstance(output.text, str):
                     output.text += final_text
-                truncate_flag = False
-
-        # 这里output.token_ids实际返回的是None
-        # text = self.tokenizer.decode(output.token_ids, skip_special_tokens=True)
-        if truncate_flag:
-            output = truncate_at_call_tool(output, self.tokenizer)
 
         agent_data.assistant_turns += 1  # assistant +1
 
@@ -305,7 +339,7 @@ class ToolAgentLoop(AgentLoopBase):
 
         agent_data.prompt_ids += agent_data.response_ids  # 将当前的回复拼接到prompt里边，等待工具调用结果（如果有），也拼接进去
         agent_data.response_mask += [1] * len(agent_data.response_ids)
-        if output.log_probs:
+        if output.log_probs is not None:
             agent_data.response_logprobs += output.log_probs
 
         # Check termination conditions
@@ -381,7 +415,7 @@ class ToolAgentLoop(AgentLoopBase):
                 message = {"role": "tool", "content": tool_response.text or ""}
 
             add_messages.append(message)
-            agent_data.messages.extend(add_messages)
+            agent_data.messages.append(message)
 
             # Handle image data
             if tool_response.image:
