@@ -13,6 +13,7 @@
 # limitations under the License.
 import argparse
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -49,6 +50,8 @@ from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
 
 logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
+
+_SAMPLING_PARAM_NAMES = set(inspect.signature(SamplingParams).parameters)
 
 
 class ExternalZeroMQDistributedExecutor(Executor):
@@ -220,6 +223,10 @@ class vLLMHttpServer:
             "disable_log_stats": self.config.disable_log_stats,
             "tensor_parallel_size": self.config.tensor_model_parallel_size,
             "seed": self.config.get("seed", 0),
+            # Keep vLLM sampling semantics aligned with the explicit rollout
+            # config instead of silently inheriting the model's HF generation
+            # config, which sglang does not use here.
+            "generation_config": "vllm",
             "override_generation_config": json.dumps(override_generation_config),
             **engine_kwargs,
         }
@@ -346,16 +353,11 @@ class vLLMHttpServer:
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
         # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
-        available_tokens = self.config.max_model_len - len(prompt_ids)
-        max_tokens = min(self.config.response_length, available_tokens)
-        if max_tokens <= 0:
-            logger.warning(
-                "Skip vLLM generation because prompt length reached max_model_len. "
-                f"prompt_len={len(prompt_ids)}, max_model_len={self.config.max_model_len}"
-            )
-            return TokenOutput(token_ids=[], log_probs=None, text="")
+        max_tokens = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
         sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
+        if sampling_params.get("stop") and "include_stop_str_in_output" in _SAMPLING_PARAM_NAMES:
+            sampling_params.setdefault("include_stop_str_in_output", True)
         sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)
         prompt_ids = _qwen2_5_vl_dedup_image_tokens(prompt_ids, self.model_config.processor)
         prompt = TokensPrompt(
@@ -370,7 +372,7 @@ class vLLMHttpServer:
         assert final_res is not None
 
         token_ids = final_res.outputs[0].token_ids
-        text = final_res.outputs[0].text
+        text = getattr(final_res.outputs[0], "text", None)
         log_probs = None
         if sampling_params.logprobs is not None:
             log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(final_res.outputs[0].logprobs)]

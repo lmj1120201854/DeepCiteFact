@@ -96,7 +96,7 @@ def ensure_token_ids(output, tokenizer):
 
 
 def get_tool_call_end_token(tool_parser) -> str:
-    return getattr(tool_parser, "tool_call_end_token", "</tool_call>")
+    return getattr(tool_parser, "tool_call_end_token", "</google_search>")
 
 
 def truncate_at_call_tool_exact(output, tokenizer, target_str: str):

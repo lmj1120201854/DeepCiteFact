@@ -10,11 +10,11 @@ def calculate_format_reward(text):
     # 我们把 user 也当做一个“虚拟标签”来处理，方便检查顺序
     # 匹配 <think>, </think>, <google_search>, </google_search>, <tool_response>, </tool_response>, <answer>, </answer> 以及 user
     # token_pattern = r'<(?:/)?(?:think|google_search|tool_response|answer)>|\buser\b'
-    token_pattern = r'<(?:/)?(?:think|google_search|tool_call|tool_response|answer)>'
+    token_pattern = r'<(?:/)?(?:think|google_search|tool_response|answer)>'
     tokens = re.findall(token_pattern, text)
 
-    # 3. 必须包含 think/answer 的基本结构；搜索可选
-    if '<think>' not in tokens or '<answer>' not in tokens:
+    # 3. 必须包含至少一次搜索流程
+    if '<google_search>' not in tokens:
         return 0.0
 
     # 4. 严苛的顺序流检查
@@ -38,12 +38,6 @@ def calculate_format_reward(text):
             if tokens[i+1] != '</google_search>':
                 return 0.0
 
-        if t == '<tool_call>':
-            if i + 1 >= len(tokens):
-                return 0.0
-            if tokens[i+1] != '</tool_call>':
-                return 0.0
-
         if t == '<tool_response>':
             if i + 1 >= len(tokens):
                 return 0.0
@@ -59,7 +53,7 @@ def calculate_format_reward(text):
 
     # 5. 闭合性验证（确保没有未闭合或嵌套错误的标签）
     # 使用计数栈或简单的正则对检查
-    for tag in ['think', 'google_search', 'tool_call', 'tool_response', 'answer']:
+    for tag in ['think', 'google_search', 'tool_response', 'answer']:
         if text.count(f'<{tag}>') != text.count(f'</{tag}>'):
             return 0.0
     

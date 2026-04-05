@@ -45,21 +45,13 @@ def generate_search_snippets(results):
     for item in results:
         if not isinstance(item, dict):
             continue
-
-        url = str(item.get("href", "")).strip()
-        # Drop malformed/truncated URLs to avoid low-quality citations.
-        if not url or "..." in url or "(truncated)" in url or not url.startswith(("http://", "https://")):
-            continue
-
+        
         snippet_id = generate_snippet_id()
-        start_str = f'<snippet id="{snippet_id}">\n'
+        start_str = "<snippet id=" + generate_snippet_id() + ">\n"
         end_str = "\n</snippet>"
-        content = "Title: " + str(item.get("title", "")) + "\n" + "URL: " + url + "\n" + "Text: " + str(item.get("body", ""))
+        content = "Title: " + item.get("title", "") + "\n" + "URL: " + item.get("href", "") + "\n" + "Text: " + item.get("body", "")
         result_text += (start_str + content + end_str + "\n")
-
-    if not result_text.strip():
-        return "Google search returned no valid snippets with usable URLs."
-
+    
     return result_text.strip()
 
     

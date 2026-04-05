@@ -11,7 +11,7 @@ def request_model(base_url, model_name, messages):
                 top_p=1.0,
                 max_tokens=8192,
                 extra_body={
-                    "stop": ["</tool_call>", "</google_search>"],
+                    "stop": ["</google_search>"],
                     "include_stop_str_in_output": True
                 }
             )
