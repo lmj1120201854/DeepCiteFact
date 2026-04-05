@@ -5,34 +5,32 @@ set -x
 
 export HYDRA_FULL_ERROR=1
 
-# claim抓取
-export CLAIM_SERVER=127.0.0.1:8000
-export CLAIM_SERVER_PATH=Qwen2.5-32B-Instruct
+export WANDB_PROJECT=DeepCiteFact
+export WANDB_ENTITY=lmj1120201854-beijing-institute-of-technology
+export WANDB_NAME=GRPO
+export WANDB_MODE=online
 
-# claim评估和citation评估，可以和前面claim抓取一致
-export CHECK_SERVER=127.0.0.1:8001
-export CHECK_SERVER_PATH=Qwen2.5-32B-Instruct
+export CLAIM_SERVER=10.0.2.150:8000
+export CLAIM_SERVER_PATH=qwen-32b
+
+export CHECK_SERVER=10.0.2.150:8000
+export CHECK_SERVER_PATH=qwen-32b
 
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/examples/sglang_multiturn/config"
 
-TRAIN_FILE="/root/output/DeepCiteFact/data/rl_train_data_filter_grpo.parquet"
+TRAIN_FILE="/data/home/3120245632/scow/ai/appData/mjli/llm_proj/DeepCiteFact/data/rl_train_data_filter_grpo.parquet"
 TEST_FILE=$TRAIN_FILE
-ACTOR_MODEL_PATH="/root/output/DeepCiteFact-SFT/DeepCiteFact-SFT-epoch4"
+ACTOR_MODEL_PATH="/data/home/3120245632/scow/ai/appData/mjli/llm_proj/DeepCiteFact/output/DeepCiteFact-SFT"
 
-SAVE_PATH="/root/output/DeepCiteFact-GRPO-ckpts"
+SAVE_PATH="/data/home/3120245632/scow/ai/appData/mjli/llm_proj/DeepCiteFact/output/DeepCiteFact-GRPO"
 
-TOOL_CONFIG_PATH="/root/output/DeepCiteFact/verl/examples/sglang_multiturn/config/tool_config/custom_tool_config.yaml"
+TOOL_CONFIG_PATH="/data/home/3120245632/scow/ai/appData/mjli/llm_proj/DeepCiteFact/verl/examples/sglang_multiturn/config/tool_config/custom_tool_config.yaml"
 
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=$((29500 + RANDOM % 1000))
-export DIST_INIT_METHOD="tcp://$MASTER_ADDR:$MASTER_PORT"
-
-PROJECT_NAME="DeepCiteFact-GRPO"
-EXPERIMENT_NAME="qwen3-8b-deepcitefact-grpo"
-
+PROJECT_NAME="DeepCiteFact"
+EXPERIMENT_NAME="GRPO"
 
 python3 -m verl.trainer.main_ppo \
     --config-path="$CONFIG_PATH" \
@@ -40,7 +38,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILE \
     data.val_files=$TEST_FILE \
-    data.train_batch_size=64 \
+    data.train_batch_size=8 \
     data.max_prompt_length=2048 \
     data.max_response_length=8192 \
     data.prompt_key=prompt \
@@ -52,7 +50,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.warmup_style='cosine' \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.1 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=16 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
@@ -66,8 +64,8 @@ python3 -m verl.trainer.main_ppo \
     global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries=100000 \
     global_profiler.global_tool_config.torch_memory.stack_depth=32 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
-    actor_rollout_ref.rollout.name=sglang \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=11 \
@@ -87,17 +85,21 @@ python3 -m verl.trainer.main_ppo \
     reward_model.reward_manager=custom \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
-    trainer.logger='["console", "tensorboard"]' \
+    trainer.logger='["console", "wandb"]' \
     trainer.project_name=$PROJECT_NAME \
     trainer.experiment_name=$EXPERIMENT_NAME \
-    trainer.n_gpus_per_node=8 \
-    trainer.nnodes=1 \
+    trainer.n_gpus_per_node=2 \
+    trainer.nnodes=4 \
     trainer.default_local_dir=$SAVE_PATH \
-    trainer.save_freq=5 \
+    trainer.save_freq=10 \
     trainer.test_freq=-1 \
     trainer.val_before_train=False \
     trainer.resume_mode="disable" \
     actor_rollout_ref.rollout.multi_turn.tool_config_path="$TOOL_CONFIG_PATH" \
     trainer.total_epochs=2 \
+    actor_rollout_ref.ref.use_torch_compile=False \
+    actor_rollout_ref.actor.use_torch_compile=False \
+    ++data.filter_overlong_prompts_workers=8 \
+    trainer.device=npu \
     actor_rollout_ref.rollout.update_weights_bucket_megabytes=512 $@ 2>&1 | tee grpo_log.txt
 

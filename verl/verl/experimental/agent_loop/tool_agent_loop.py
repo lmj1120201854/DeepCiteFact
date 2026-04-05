@@ -81,6 +81,20 @@ def truncate_at_call_tool(output, tokenizer):
     return output
 
 
+def ensure_token_ids(output, tokenizer):
+    """Normalize async server outputs to token ids."""
+    if isinstance(output.token_ids, list) and len(output.token_ids) > 0:
+        return output.token_ids
+
+    if not isinstance(output.text, str):
+        raise TypeError(
+            "ToolAgentLoop expected async rollout output to contain token_ids or string text, "
+            f"got token_ids={type(output.token_ids).__name__}, text={type(output.text).__name__}"
+        )
+
+    return tokenizer.encode(output.text, add_special_tokens=False)
+
+
 class AgentData:
     """Encapsulates all state variables for the agent loop."""
 
@@ -263,25 +277,24 @@ class ToolAgentLoop(AgentLoopBase):
                 sampling_params=sampling_params,
                 image_data=agent_data.image_data,
             )
+        output.token_ids = ensure_token_ids(output, self.tokenizer)
         # 先判断是否需要结束并添加额外信息
         truncate_flag = True
         if self.max_assistant_turns and agent_data.assistant_turns + 1 >= self.max_assistant_turns:
             output = truncate_at_call_tool(output, self.tokenizer)
-            response_ids = self.tokenizer.encode(
-                output.text,
-                add_special_tokens=False
-            )
-            _, tool_calls = await self.tool_parser.extract_tool_calls(response_ids)
+            _, tool_calls = await self.tool_parser.extract_tool_calls(output.token_ids)
             if len(tool_calls) > 0:
                 final_text = "\n<answer>Cannot determine an answer based on the available information.</answer>"
-                output.text += final_text
+                final_text_ids = self.tokenizer.encode(final_text, add_special_tokens=False)
+                output.token_ids.extend(final_text_ids)
+                if output.log_probs:
+                    pad_logprob = output.log_probs[-1] if output.log_probs else 0.0
+                    output.log_probs.extend([pad_logprob] * len(final_text_ids))
+                if isinstance(output.text, str):
+                    output.text += final_text
                 truncate_flag = False
 
         # 这里output.token_ids实际返回的是None
-        output.token_ids = self.tokenizer.encode(
-            output.text,
-            add_special_tokens=False
-        )
         # text = self.tokenizer.decode(output.token_ids, skip_special_tokens=True)
         if truncate_flag:
             output = truncate_at_call_tool(output, self.tokenizer)
