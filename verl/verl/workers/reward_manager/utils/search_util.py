@@ -9,9 +9,8 @@ def calculate_search_reward(text, max_searches=5):
         if not text or not isinstance(text, str):
             return 0.0, 0.0
 
-        # 1. 提取所有 google_search 到 tool_response 的配对块
-        # pattern = r'<google_search>.*?</google_search>.*?<tool_response>(.*?)</tool_response>'
-        pattern = r'<google_search>.*?</google_search>\s*user\s*<tool_response>(.*?)</tool_response>'
+        # 1. 提取工具调用到 tool_response 的配对块（兼容新旧两种格式）
+        pattern = r'(?:<tool_call>.*?</tool_call>|<google_search>.*?</google_search>)\s*user\s*<tool_response>(.*?)</tool_response>'
         responses = re.findall(pattern, text, re.DOTALL)
         if not responses:
             return 0.0, 0.0
