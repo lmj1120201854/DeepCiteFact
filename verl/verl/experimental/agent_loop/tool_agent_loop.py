@@ -81,6 +81,35 @@ def truncate_at_call_tool(output, tokenizer):
     return output
 
 
+
+def ensure_output_text_and_token_ids(output, tokenizer, force_decode_text: bool = False):
+    """Keep rollout text and token ids synchronized across different backends."""
+    if not isinstance(output.token_ids, list):
+        if not isinstance(output.text, str):
+            raise TypeError("Rollout output must provide either token_ids or text.")
+        output.token_ids = tokenizer.encode(output.text, add_special_tokens=False)
+
+    if force_decode_text or not isinstance(output.text, str):
+        output.text = tokenizer.decode(output.token_ids, skip_special_tokens=True)
+
+    return output
+
+
+def retokenize_output_text(output, tokenizer):
+    """Rebuild token ids after mutating rollout text."""
+    if not isinstance(output.text, str):
+        raise TypeError("Cannot retokenize rollout output without text.")
+
+    output.token_ids = tokenizer.encode(output.text, add_special_tokens=False)
+    if output.log_probs is not None:
+        if len(output.log_probs) < len(output.token_ids):
+            output.log_probs = output.log_probs + [0.0] * (len(output.token_ids) - len(output.log_probs))
+        else:
+            output.log_probs = output.log_probs[: len(output.token_ids)]
+
+    return output
+
+
 class AgentData:
     """Encapsulates all state variables for the agent loop."""
 
@@ -263,28 +292,22 @@ class ToolAgentLoop(AgentLoopBase):
                 sampling_params=sampling_params,
                 image_data=agent_data.image_data,
             )
-        # 先判断是否需要结束并添加额外信息
+        output = ensure_output_text_and_token_ids(output, self.tokenizer)
+        # ????????????????
         truncate_flag = True
         if self.max_assistant_turns and agent_data.assistant_turns + 1 >= self.max_assistant_turns:
             output = truncate_at_call_tool(output, self.tokenizer)
-            response_ids = self.tokenizer.encode(
-                output.text,
-                add_special_tokens=False
-            )
-            _, tool_calls = await self.tool_parser.extract_tool_calls(response_ids)
+            output = ensure_output_text_and_token_ids(output, self.tokenizer, force_decode_text=True)
+            _, tool_calls = await self.tool_parser.extract_tool_calls(output.token_ids)
             if len(tool_calls) > 0:
                 final_text = "\n<answer>Cannot determine an answer based on the available information.</answer>"
                 output.text += final_text
+                output = retokenize_output_text(output, self.tokenizer)
                 truncate_flag = False
 
-        # 这里output.token_ids实际返回的是None
-        output.token_ids = self.tokenizer.encode(
-            output.text,
-            add_special_tokens=False
-        )
-        # text = self.tokenizer.decode(output.token_ids, skip_special_tokens=True)
         if truncate_flag:
             output = truncate_at_call_tool(output, self.tokenizer)
+            output = ensure_output_text_and_token_ids(output, self.tokenizer, force_decode_text=True)
 
         agent_data.assistant_turns += 1  # assistant +1
 
