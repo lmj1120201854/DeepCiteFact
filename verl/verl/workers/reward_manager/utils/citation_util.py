@@ -205,15 +205,21 @@ def calculate_f1(response, url_to_content):
 
     if total_cnt == 0:
         precision = 0.1 if not url_to_content else 0.0
-    else:
-        if not url_to_content:
-            precision = -0.5
-        else:
-            precision = total_score / total_cnt
+        recall = 0.0
+        f1 = 0.0
+        return precision, recall, f1
 
-    recall = right_claim_cnt
-    recall_bonus = min(right_claim_cnt * 0.1, 0.5)
-    f1 = max(min(precision + recall_bonus, 1.0), 0.0)
+    if not url_to_content:
+        precision = -0.5
+    else:
+        precision = total_score / total_cnt
+
+    recall = right_claim_cnt / total_cnt
+    precision_for_f1 = max(precision, 0.0)
+    if precision_for_f1 + recall == 0:
+        f1 = 0.0
+    else:
+        f1 = 2 * precision_for_f1 * recall / (precision_for_f1 + recall)
 
     return precision, recall, f1
 
