@@ -349,6 +349,12 @@ class vLLMHttpServer:
         max_tokens = self.config.max_model_len - len(prompt_ids)
         sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
+
+        # Add stop tokens for tool calling support (consistent with SGLang server behavior)
+        if "stop" not in sampling_params:
+            sampling_params["stop"] = ["</google_search>"]
+            sampling_params["include_stop_str_in_output"] = True
+
         sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)
         prompt_ids = _qwen2_5_vl_dedup_image_tokens(prompt_ids, self.model_config.processor)
         prompt = TokensPrompt(
@@ -362,11 +368,12 @@ class vLLMHttpServer:
             final_res = output
         assert final_res is not None
 
-        token_ids = final_res.outputs[0].token_ids
+        token_ids = list(final_res.outputs[0].token_ids)
+        text = final_res.outputs[0].text
         log_probs = None
         if sampling_params.logprobs is not None:
             log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(final_res.outputs[0].logprobs)]
-        return TokenOutput(token_ids=token_ids, log_probs=log_probs)
+        return TokenOutput(token_ids=token_ids, log_probs=log_probs, text=text)
 
     async def wake_up(self):
         if self.rollout_mode == RolloutMode.HYBRID:

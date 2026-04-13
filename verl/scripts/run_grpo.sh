@@ -4,6 +4,7 @@
 set -x
 
 export HYDRA_FULL_ERROR=1
+export VLLM_USE_V1=1
 
 # claim抓取
 export CLAIM_SERVER=127.0.0.1:8000
@@ -67,7 +68,7 @@ python3 -m verl.trainer.main_ppo \
     global_profiler.global_tool_config.torch_memory.stack_depth=32 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
-    actor_rollout_ref.rollout.name=sglang \
+    actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=11 \
@@ -77,12 +78,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.response_length=8192 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.75 \
     actor_rollout_ref.rollout.enable_chunked_prefill=True \
-    actor_rollout_ref.rollout.multi_stage_wake_up=True \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
-    actor_rollout_ref.rollout.over_sample_rate=0.1 \
-    actor_rollout_ref.rollout.skip_tokenizer_init=False \
     reward_model.enable=False \
     reward_model.reward_manager=custom \
     algorithm.use_kl_in_reward=False \
@@ -98,6 +96,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     trainer.resume_mode="disable" \
     actor_rollout_ref.rollout.multi_turn.tool_config_path="$TOOL_CONFIG_PATH" \
-    trainer.total_epochs=2 \
-    actor_rollout_ref.rollout.update_weights_bucket_megabytes=512 $@ 2>&1 | tee grpo_log.txt
+    trainer.total_epochs=2 $@ 2>&1 | tee grpo_log.txt
 
